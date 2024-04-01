@@ -544,6 +544,7 @@ async def off(client, message):
     global ascheduler
     try:
         
+        
 
     except Exception as e:
         await message.reply(f"Внутренняя ошибка: `{str(e)}`")
