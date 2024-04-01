@@ -498,9 +498,7 @@ async def send_messages(client, id, username, interval, messages):
             for message in messages:
                 tg_chat_id = message['tg_chat_id']
                 message_id = message['message_id']
-                await asyncio.sleep(random.randint(1, 2))
                 await client.copy_message(username, tg_chat_id, message_id)
-                await asyncio.sleep(interval + random.randint(1, 7))
     except asyncio.exceptions.CancelledError:
         pass
     except Exception as e:
@@ -512,7 +510,7 @@ async def create_tasks(client, message):
         async with asyncpg.create_pool(dsn) as pool:
             async with pool.acquire() as connection:
                 async with connection.transaction():
-                    groups = await connection.fetch("SELECT id, username, interval_seconds FROM groups WHERE id = $1")
+                    groups = await connection.fetch("SELECT id, username, interval_seconds FROM groups")
 
                     for group in groups:
                         if group:
@@ -520,7 +518,7 @@ async def create_tasks(client, message):
                             username = group['username']
                             interval = group['interval_seconds']
                             messages = await connection.fetch("SELECT message_id, message_text, tg_chat_id FROM messages WHERE id_chat = $1", id)
-                            ascheduler.add_job(send_messages, args=[client, id, username, interval, messages], id=str(id), max_instances=1, replace_existing=True)
+                            ascheduler.add_job(send_messages, args=[client, id, username, interval, messages], id=str(id), max_instances=1)
                     
     except ValueError as e:
         await message.reply(f"Внутренняя ошибка: `{str(e)}`")
@@ -544,7 +542,8 @@ async def off(client, message):
     global ascheduler
     try:
         
-        
+        ascheduler.shutdown(wait=False)
+        await message.reply("Рассылка отключена")
 
     except Exception as e:
         await message.reply(f"Внутренняя ошибка: `{str(e)}`")
