@@ -2,8 +2,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.jobstores.memory import MemoryJobStore
 from dotenv import find_dotenv, load_dotenv
+from pyrogram import Client, filters, idle
 from pyrogram.errors import FloodWait
-from pyrogram import Client, filters
 from pyrogram.errors import *
 import asyncpg
 import asyncio
@@ -92,7 +92,7 @@ try:
                             username TEXT,
                             interval_seconds INTEGER DEFAULT 40,
                             messages_count INTEGER DEFAULT 0,
-                            send_status INTEGER DEFAULT 0
+                            send_status INTEGER DEFAULT 1
                         );
                     ''')
 
@@ -106,7 +106,7 @@ try:
                             FOREIGN KEY (id_chat) REFERENCES groups(id) ON DELETE CASCADE
                         );
                     ''')
-        
+
     loop = asyncio.get_event_loop()
     loop.run_until_complete(setup_database())
     print("Connected to PostgreSQL")
@@ -122,18 +122,19 @@ async def menu(client, message):
         text="Список команд:\n\
 1. `!menu` - Показать меню\n\
 2. `!new {link}` - Добавить чат по юзернейму\n\
-3. `!del {id_chat,id_chat...}` - Удалить чат/несколько чатов(1,2,3)/все чаты(all)\n\
+3. `!del {id_chat}` - Удалить чат\n\
 4. `!chats` - Показать список чатов\n\
-5. `!addmes {id_chat,id_chat...}` - Добавить сообщение для рассылки в чат/несколько чатов(1,2,3)/все чаты(all)\n\
-6. `!delmes {message_id,message_id...}` - Удалить сообщение/несколько сообщений(1,2,3)\n\
-7. `!timer {id_chat,id_chat...} {time}` - Установить таймер рассылки в чат/несколько чатов(1,2,3)/все чаты(all) в формате 06:12:34\n\
-8. `!off {id_chat,id_chat...}` - Отключить рассылку, если без аргументов, то выключится во всех сразу\n\
-9. `!on {id_chat,id_chat...}` - Включить рассылку, если без аргументов, то включится во всех сразу\n\
-10.`!messages {id_chat}` - Показать все сообщения в чате\n\
-11.`!allmessages` - Показать все сообщения\n\
-12.`!delallin {id_chat,id_chat...}` - Удалить все сообщения из указанных чатов\n\
-13.`!clearmess` - Удалить ВСЕ сообщения из базы данных\n\
-14.`!clearall` - Отчистить ВСЮ базу данных. ВНИМАНИЕ! Эта функция не выходит из чатов!",
+5. `!addmes {id_chat.}` - Добавить сообщение для рассылки в чат\n\
+6. `!delmes {message_id}` - Удалить сообщение\n\
+7. `!timer {id_chat} {time}` - Установить таймер рассылки в чат\n\
+8. `!enable {id_chat}` - Включить группу в рассылку\n\
+9. `!disable {id_chat}` - Убрать группу из рассылки\n\
+10.`!off` - Отключить рассылку\n\
+11.`!on` - Включить рассылку\n\
+12.`!messages {id_chat}` - Показать все сообщения в чате\n\
+13.`!allmessages` - Показать все сообщения\n\
+14.`!clearall` - Отчистить ВСЮ базу данных. ВНИМАНИЕ! Эта функция не выходит из чатов!\n\
+15.`!docs` - Ссылка на документацию",
     )
 
 @app.on_message(filters.command("docs", prefixes=prefixes))
@@ -188,7 +189,7 @@ async def new_chat(client, message):
                     await message.reply("Эта ссылка для приглашения больше не работает")
 
     except asyncpg.exceptions.PostgresError as e:
-        await message.reply(f"Ошибка PostgreSQL: {e}")
+        await message.reply(f"Ошибка PostgreSQL: `{e}`")
     except Exception as e:
         await message.reply(f"Внутренняя ошибка: `{str(e)}`")
 
@@ -235,7 +236,7 @@ async def del_chat(client, message):
     except ValueError:
         await message.reply("Индекс группы должен быть целым числом")
     except asyncpg.exceptions.PostgresError as e:
-        await message.reply(f"Ошибка PostgreSQL: {e}")
+        await message.reply(f"Ошибка PostgreSQL: `{e}`")
     except Exception as e:
         await message.reply(f"Внутренняя ошибка: `{e}`")
 
@@ -245,18 +246,84 @@ async def view_chats(client, message):
     try:
         async with asyncpg.create_pool(dsn=dsn) as pool:
             async with pool.acquire() as connection:
-                groups = await connection.fetch("SELECT * FROM groups")
+                groups = await connection.fetch("SELECT * FROM groups ORDER BY id")
                 chat_list_text = "Ваши чаты:\n"
 
                 for chat in groups:
                     time = seconds_to_time(chat[4])
-                    chat_list_text += f"{chat[0]}. `{chat[1]}`, интервал: `{time}`, кол-во сообщений: `{chat[5]}`\n"
+                    if chat[6] == 1:
+                        status = '🟢'
+                    elif chat[6] == 0:
+                        status = '🔴'
+                    chat_list_text += f"{chat[0]}. `{chat[1]}`, интервал: `{time}`, кол-во сообщений: `{chat[5]}` {status}\n"
 
                 if chat_list_text == "Ваши чаты:\n":
                     await message.reply("Список пустой")
                 else:
                     await message.reply(chat_list_text)
 
+    except asyncpg.exceptions.PostgresError as e:
+        await message.reply(f"Ошибка PostgreSQL: `{e}`")
+    except Exception as e:
+        await message.reply(f"Внутренняя ошибка: `{e}`")
+
+@app.on_message(filters.command("enable", prefixes=prefixes))
+@check_username
+async def enable(client, message):
+    try:
+        async with asyncpg.create_pool(dsn=dsn) as pool:
+            async with pool.acquire() as connection:
+                async with connection.transaction():
+                    command_parts = message.text.split(maxsplit=1)
+
+                    if len(command_parts) != 2:
+                        await message.reply("Неверное количество аргументов. Используйте `!enable {id_chat}`")
+                        return
+                    if command_parts[1] != 'all':
+                        id_chat = [int(id.strip()) for id in command_parts[1].split(",")]
+                    
+                    if command_parts[1] == 'all':
+                        await connection.execute("UPDATE groups SET send_status = 1")
+                        await message.reply("Все группы включены в рассылку")
+                    else:
+                        for id in id_chat:
+                            await connection.execute("UPDATE groups SET send_status = 1 WHERE id=$1", id)
+                        await message.reply("Выбранные группы включены в рассылку")
+    except IndexError:
+        await message.reply("Неверное количество аргументов. Используйте `!enable {id_chat}`")
+    except ValueError:
+        await message.reply("Индекс группы должен быть целым числом")
+    except asyncpg.exceptions.PostgresError as e:
+        await message.reply(f"Ошибка PostgreSQL: `{e}`")
+    except Exception as e:
+        await message.reply(f"Внутренняя ошибка: `{e}`")
+
+@app.on_message(filters.command("disable", prefixes=prefixes))
+@check_username
+async def disable(client, message):
+    try:
+        async with asyncpg.create_pool(dsn=dsn) as pool:
+            async with pool.acquire() as connection:
+                async with connection.transaction():
+                    command_parts = message.text.split(maxsplit=1)
+
+                    if len(command_parts) != 2:
+                        await message.reply("Неверное количество аргументов. Используйте `!disable {id_chat}`")
+                        return
+                    if command_parts[1] != 'all':
+                        id_chat = [int(id.strip()) for id in command_parts[1].split(",")]
+                    
+                    if command_parts[1] == 'all':
+                        await connection.execute("UPDATE groups SET send_status = 0")
+                        await message.reply("Все группы убраны из рассылки")
+                    else:
+                        for id in id_chat:
+                            await connection.execute("UPDATE groups SET send_status = 0 WHERE id=$1", id)
+                        await message.reply("Выбранные группы убраны из рассылки")
+    except IndexError:
+        await message.reply("Неверное количество аргументов. Используйте `!disable {id_chat}`")
+    except ValueError:
+        await message.reply("Индекс группы должен быть целым числом")
     except asyncpg.exceptions.PostgresError as e:
         await message.reply(f"Ошибка PostgreSQL: `{e}`")
     except Exception as e:
@@ -294,7 +361,7 @@ async def add_messages(client, message):
     except ValueError:
         await message.reply("Индекс группы должен быть целым числом")
     except Exception as e:
-        await message.reply(f"Внутренняя ошибка: {str(e)}")
+        await message.reply(f"Внутренняя ошибка: `{str(e)}`")
 
 @app.on_message(filters.command("delmes", prefixes=prefixes))
 @check_username
@@ -354,9 +421,9 @@ async def del_messages(client, message):
     except ValueError:
         await message.reply("Индексы сообщений и идентификаторы чатов должны быть целыми числами")
     except asyncpg.exceptions.PostgresError as e:
-        await message.reply(f"Ошибка PostgreSQL: {str(e)}")
+        await message.reply(f"Ошибка PostgreSQL: `{str(e)}`")
     except Exception as e:
-        await message.reply(f"Внутренняя ошибка: {str(e)}")
+        await message.reply(f"Внутренняя ошибка: `{str(e)}`")
         
 @app.on_message(filters.command("timer", prefixes=prefixes))
 @check_username
@@ -435,7 +502,7 @@ async def view_messages(client, message):
                     content = "Сообщение без текста"
                 words = content.split()[:15]
                 truncated_message = ' '.join(words)
-                messages_list_text += f"{msg['message_id']}. {truncated_message}\n"
+                messages_list_text += f"ID:`{msg['message_id']}` {truncated_message}\n"
 
         await message.reply(messages_list_text)
 
@@ -444,9 +511,9 @@ async def view_messages(client, message):
     except IndexError:
         await message.reply("Неверное количество аргументов. Используйте `!messages {id_chat}`")
     except asyncpg.exceptions.PostgresError as e:
-        await message.reply(f"Ошибка PostgreSQL: {str(e)}")
+        await message.reply(f"Ошибка PostgreSQL: `{str(e)}`")
     except Exception as e:
-        await message.reply(f"Внутренняя ошибка: {str(e)}")
+        await message.reply(f"Внутренняя ошибка: `{str(e)}`")
 
 @app.on_message(filters.command("allmessages", prefixes=prefixes))
 @check_username
@@ -499,6 +566,7 @@ async def send_messages(client, id, username, interval, messages):
                 tg_chat_id = message['tg_chat_id']
                 message_id = message['message_id']
                 await client.copy_message(username, tg_chat_id, message_id)
+                await asyncio.sleep(interval)
     except asyncio.exceptions.CancelledError:
         pass
     except Exception as e:
@@ -510,10 +578,10 @@ async def create_tasks(client, message):
         async with asyncpg.create_pool(dsn) as pool:
             async with pool.acquire() as connection:
                 async with connection.transaction():
-                    groups = await connection.fetch("SELECT id, username, interval_seconds FROM groups")
+                    groups = await connection.fetch("SELECT id, username, interval_seconds, send_status FROM groups")
 
                     for group in groups:
-                        if group:
+                        if group["send_status"] == 1:
                             id = group['id']
                             username = group['username']
                             interval = group['interval_seconds']
@@ -595,10 +663,11 @@ async def handler(signal, frame):
     async with asyncpg.create_pool(dsn=dsn) as pool:
         async with pool.acquire() as connection:
             async with connection.transaction():
-                connection.close()
-                print("Disconnected from PostgreSQL")
-    sys.exit()
+                await connection.close()
 
-signal.signal(signal.SIGINT, handler)
+    await asyncio.sleep(1)
+    app.loop.stop()
+
+signal.signal(signal.SIGINT, lambda s, f: asyncio.ensure_future(handler(s, f)))
 
 app.run()
