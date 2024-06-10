@@ -5,6 +5,7 @@ from dotenv import find_dotenv, load_dotenv
 from pyrogram import Client, filters, idle
 from pyrogram.errors import FloodWait
 from pyrogram.errors import *
+import logging
 import asyncpg
 import asyncio
 import signal
@@ -12,6 +13,10 @@ import random
 import time
 import sys
 import os
+
+#ЛОГИРОВАНИЕ
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 #СЛУЖЕБНЫЕ ПЕРЕМЕННЫЕ
 allowed_usernames = ["TimurLebedev213"]
@@ -659,15 +664,15 @@ async def handle_message(client, message):
     except Exception as e:
         await message.reply(f"Внутренняя ошибка: `{str(e)}`")
 
-async def handler(signal, frame):
+@app.on_message(filters.command("shutdown", prefixes="/"))
+async def shutdown(client, message):
     async with asyncpg.create_pool(dsn=dsn) as pool:
         async with pool.acquire() as connection:
             async with connection.transaction():
                 await connection.close()
 
     await asyncio.sleep(1)
-    app.loop.stop()
+    app.stop()
 
-signal.signal(signal.SIGINT, lambda s, f: asyncio.ensure_future(handler(s, f)))
 
 app.run()
